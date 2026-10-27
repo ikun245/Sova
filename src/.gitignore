@@ -1,0 +1,14 @@
+/soc
+/soc.exe
+/.env
+/data/
+/workspace/
+*.log
+
+# Local model configuration may reference real endpoints and keys.
+/models.yaml
+/models.local.yaml
+
+# Hunt run state: contains the exact argv a human approved.
+hunt-parked*.json
+parked-*.json

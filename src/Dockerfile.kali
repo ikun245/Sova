@@ -1,0 +1,100 @@
+# Kali toolbox: the execution environment for red-team tools.
+#
+# The platform itself runs as a small Go binary; only the scanners live here.
+# Keeping them in a separate image means the API image stays auditable and a
+# tool compromise does not automatically own the credential store.
+#
+# Build:  docker compose build toolbox
+# Size:   ~950 MB with the core tier; ~2.5 GB with KALI_BULK=1 because of seclists.
+#         Add --build-arg KALI_EXTRA="metasploit-framework" only when an
+#         engagement explicitly authorizes a framework install.
+FROM kalilinux/kali-rolling
+
+ARG DEBIAN_FRONTEND=noninteractive
+
+# Pin one mirror instead of the http.kali.org redirector.
+#
+# Observed failure: the redirector handed out mirrors.neusoft.edu.cn, which does
+# not resolve, so the install died with "Could not resolve" *after* downloading
+# 404 MB. Acquire::Retries cannot help a DNS failure, and the retry loop only
+# re-downloaded the same 404 MB. A single reachable mirror is slower in theory
+# and far more reliable in practice.
+#
+# Override with --build-arg KALI_MIRROR=http://your.mirror/kali when the chosen
+# host is not reachable from the build machine.
+ARG KALI_MIRROR=http://mirrors.tuna.tsinghua.edu.cn/kali
+RUN set -eux; \
+    printf 'deb %s kali-rolling main contrib non-free non-free-firmware\n' "$KALI_MIRROR" > /etc/apt/sources.list; \
+    rm -f /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources
+
+# Two tiers on purpose.
+#
+# CORE is small (a few hundred MB) and every entry is needed for the platform's
+# own tools to work, so a failure here must fail the build.
+#
+# BULK is large (seclists alone is hundreds of MB). It is optional because on a
+# slow or flaky mirror it dominates the build time, and failing the whole image
+# over a wordlist would leave the platform with no scanner at all. When BULK is
+# skipped the affected tools report binary_missing, which is honest and visible,
+# instead of silently pretending to be available.
+ARG KALI_BULK=1
+
+# apt-get exit 100 usually means a transient repo failure (a mirror served a
+# half-read package index), not a bad package name, so a few retries with a
+# clean list is what makes the build reproducible on a slow link.
+RUN set -eux; \
+    for attempt in 1 2 3; do \
+        if apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=60 update \
+            && apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=60 \
+                install -y --no-install-recommends \
+                    ca-certificates \
+                    curl \
+                    wget \
+                    dnsutils \
+                    whois \
+                    netcat-traditional \
+                    openssl \
+                    iputils-ping \
+                    traceroute \
+                    nmap \
+                    masscan \
+                    gobuster \
+                    dirb \
+                    whatweb \
+                    nikto \
+                    sqlmap \
+                    hydra; then \
+            apt-get clean && rm -rf /var/lib/apt/lists/*; \
+            break; \
+        fi; \
+        echo "core apt attempt ${attempt} failed; retrying after a clean"; \
+        rm -rf /var/lib/apt/lists/*; \
+        if [ "${attempt}" = "3" ]; then exit 1; fi; \
+        sleep 10; \
+    done
+
+RUN set -eux; \
+    if [ "$KALI_BULK" = "1" ]; then \
+        if apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=60 update \
+            && apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=60 \
+                install -y --no-install-recommends \
+                    ffuf feroxbuster nuclei seclists wordlists; then \
+            apt-get clean && rm -rf /var/lib/apt/lists/*; \
+        else \
+            echo "WARNING: bulk wordlist packages failed to install."; \
+            echo "WARNING: ffuf/feroxbuster/nuclei will report binary_missing."; \
+            echo "WARNING: rebuild with a faster mirror or KALI_BULK=0 and install them later."; \
+            rm -rf /var/lib/apt/lists/*; \
+        fi; \
+    else \
+        echo "KALI_BULK=0: skipping ffuf, feroxbuster, nuclei, seclists, wordlists"; \
+    fi
+
+# A predictable workspace: relative output paths and wordlist references land
+# here instead of in the image, and the platform pins interpreter commands to it.
+WORKDIR /work
+RUN mkdir -p /work && chmod 777 /work
+
+# Keep the container alive so the executor can `docker exec` into it. A fresh
+# container per command would add hundreds of milliseconds to every probe.
+CMD ["sleep", "infinity"]

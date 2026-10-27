@@ -1,0 +1,73 @@
+# Example model configuration for `soc models check` and future agent use.
+# Copy to models.yaml and point SOC_MODELS_CONFIG at it:
+#   $env:SOC_MODELS_CONFIG = "models.yaml"
+#
+# Three layers, deliberately separated:
+#   providers = where to connect (endpoint, auth, transport)
+#   profiles  = what a model is (type, limits, abilities)
+#   roles     = which business use points at which profile
+#
+# Model `type` decides the protocol and the adapter, so a role can never be
+# bound to a mismatched model. Supported types: chat, vision, embedding,
+# rerank, asr.
+
+providers:
+  # One endpoint can serve several model types. base_urls / api_formats
+  # override base_url / api_format for a single type.
+  deepseek:
+    api_format: openai-chat-completions
+    base_url: https://api.deepseek.com
+    # This is the NAME of an environment variable, not the key itself. Putting
+    # the key here would commit a secret and would not work: the loader calls
+    # os.Getenv on this value.
+    api_key_env: DEEPSEEK_API_KEY
+    timeout: 60s
+    max_retries: 2
+    # Some reasoning models reject "max_tokens".
+    max_tokens_field: max_tokens
+
+  local:
+    base_url: http://127.0.0.1:8081
+    base_urls:
+      embedding: http://127.0.0.1:8081
+      rerank: http://127.0.0.1:8082
+
+profiles:
+  triage-default:
+    provider_id: deepseek
+    model_id: deepseek-chat
+    type: chat
+    input: [text]
+    context_window: 64000
+    max_output_tokens: 8192
+    capabilities: [tools, json_schema, streaming]
+    cost:
+      input: 0.27
+      output: 1.1
+      currency: USD
+
+  summary-default:
+    provider_id: deepseek
+    model_id: deepseek-chat
+    type: chat
+    input: [text]
+    context_window: 64000
+    max_output_tokens: 2048
+
+  embedding-default:
+    provider_id: local
+    model_id: bge-m3
+    type: embedding
+    # Required for embeddings so an index is never built on an unknown width.
+    dimension: 1024
+
+  rerank-default:
+    provider_id: local
+    model_id: bge-reranker-v2-m3
+    type: rerank
+
+roles:
+  triage: triage-default
+  summary: summary-default
+  embedding: embedding-default
+  rerank: rerank-default

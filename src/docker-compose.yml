@@ -1,0 +1,97 @@
+services:
+  api:
+    build:
+      context: .
+    environment:
+      SOC_ADDR: 0.0.0.0:8080
+      # Container-internal address on purpose. Substituting a host env var here
+      # would let a host-oriented DSN (127.0.0.1) leak in, which inside the
+      # container points at the container itself and fails to connect.
+      SOC_PG_DSN: postgres://soc:soc-local-dev-only@postgres:5432/soc?sslmode=disable
+      SOC_REDIS_ADDR: redis:6379
+    ports:
+      - "127.0.0.1:8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: .
+    command: ["worker"]
+    environment:
+      # Same reasoning as the api service: container-internal address only.
+      SOC_PG_DSN: postgres://soc:soc-local-dev-only@postgres:5432/soc?sslmode=disable
+      SOC_REDIS_ADDR: redis:6379
+      SOC_WORKER_ID: compose-worker
+      # Run scanners inside the Kali toolbox instead of the worker image.
+      SOC_EXEC_BACKEND: docker
+      SOC_TOOLBOX_CONTAINER: soc-toolbox
+      SOC_TOOLBOX_WORKDIR: /work
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      toolbox:
+        condition: service_started
+    restart: unless-stopped
+    # To let the worker drive the toolbox from inside Docker, it needs the
+    # Docker socket. That is equivalent to root on the host, so it is left
+    # commented out on purpose: enable it only on a dedicated engagement host,
+    # never on a machine you also use for other work. Running `soc` natively
+    # (as on Windows) needs no socket mount at all.
+    # volumes:
+    #   - /var/run/docker.sock:/var/run/docker.sock
+
+  # Kali toolbox: where the scanners actually run. No published ports, because
+  # nothing should reach it from outside; the worker drives it through docker exec.
+  toolbox:
+    build:
+      context: .
+      dockerfile: Dockerfile.kali
+    container_name: soc-toolbox
+    working_dir: /work
+    command: ["sleep", "infinity"]
+    volumes:
+      - toolbox-work:/work
+    restart: unless-stopped
+
+  postgres:
+    image: paradedb/paradedb:v0.25.11-pg17
+    environment:
+      POSTGRES_DB: soc
+      POSTGRES_USER: soc
+      POSTGRES_PASSWORD: soc-local-dev-only
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U soc -d soc"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  redis:
+    image: redis:7.4-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "127.0.0.1:6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
+  redis-data:
+  toolbox-work:

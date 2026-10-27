@@ -1,0 +1,2 @@
+DROP TABLE IF EXISTS scope_approvals;
+DROP TABLE IF EXISTS scopes;

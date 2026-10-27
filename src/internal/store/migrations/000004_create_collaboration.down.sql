@@ -1,0 +1,7 @@
+DROP TABLE IF EXISTS escalations;
+DROP TABLE IF EXISTS room_events;
+DROP TABLE IF EXISTS room_participants;
+DROP TABLE IF EXISTS rooms;
+DROP TABLE IF EXISTS team_members;
+DROP TABLE IF EXISTS teams;
+DROP TABLE IF EXISTS workspaces;
